@@ -1,3 +1,6 @@
 <resources>
     <string name="app_name">TouchLock</string>
+    <string name="touch_guard_label">TouchLock gesture protection</string>
+    <string name="widget_action">Show floating lock</string>
+    <string name="touch_guard_description">Blocks touchscreen input, including notification and navigation gestures, only while you lock with the floating button. On Android 13, touch exploration is requested only while locked. Hold the lock for three seconds to unlock. Turning the screen off stops TouchLock. Does not read screen content. Requires Android 13 or newer.</string>
 </resources>

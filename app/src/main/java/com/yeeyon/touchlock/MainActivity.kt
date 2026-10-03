@@ -1,7 +1,10 @@
 package com.yeeyon.touchlock
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -23,9 +26,11 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Switch
 import android.widget.Toast
 
 class MainActivity : Activity() {
+    companion object { const val ACTION_WIDGET_ENABLE = "com.yeeyon.touchlock.WIDGET_ENABLE" }
     private val navy = Color.rgb(16, 38, 60)
     private val teal = Color.rgb(0, 112, 124)
     private val muted = Color.rgb(74, 95, 114)
@@ -37,6 +42,8 @@ class MainActivity : Activity() {
     private lateinit var notificationButton: Button
     private lateinit var enableButton: Button
     private lateinit var stopButton: Button
+    private lateinit var gestureState: TextView
+    private lateinit var gestureButton: Button
     private var receiverRegistered = false
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) { refresh() }
@@ -95,17 +102,43 @@ class MainActivity : Activity() {
         permissions.addView(notificationState.apply { setPadding(0, dp(6), 0, dp(8)) })
         notificationButton = button("Allow notifications", Color.rgb(225, 244, 245), teal) { allowNotifications() }
         permissions.addView(notificationButton)
+        permissions.addView(View(this).apply { setBackgroundColor(Color.rgb(229, 236, 243)) }, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(20); bottomMargin = dp(20) })
+        val gestureSwitch = Switch(this).apply {
+            text = "Block system gestures"
+            textSize = 18f
+            setTextColor(navy)
+            isChecked = TouchGuardService.requested(this@MainActivity)
+            isEnabled = Build.VERSION.SDK_INT >= 33
+            setOnCheckedChangeListener { _, checked ->
+                stopService(Intent(this@MainActivity, TouchLockService::class.java))
+                getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("systemGestureLock", checked).apply()
+                refresh()
+            }
+        }
+        permissions.addView(gestureSwitch)
+        gestureState = text("", 15f, muted)
+        permissions.addView(gestureState.apply { setPadding(0, dp(6), 0, dp(8)) })
+        gestureButton = button("Enable gesture protection", Color.rgb(225, 244, 245), teal) { openGestureSettings() }
+        permissions.addView(gestureButton)
         content.addView(permissions)
 
         content.addView(text("HOW TO USE", 13f, teal, true).apply { setPadding(0, dp(26), 0, dp(12)); letterSpacing = 0.12f })
         val instructions = card(Color.WHITE)
         step(instructions, "1", "Play your video", "Enable the floating lock, then open WhatsApp or another video app.")
         step(instructions, "2", "Tap to lock", "The open padlock means ready. Tap it or use Lock screen touch in the notification. Drag the button to reposition it, even while locked.")
-        step(instructions, "3", "Hold 3 seconds to unlock", "Hold the closed padlock still until the ring fills. Releasing early or dragging keeps touch locked. Use Show button in the notification if you lose the control.")
+        step(instructions, "3", "Hold 3 seconds to unlock", "Hold the closed padlock still until the ring fills. Releasing early or dragging keeps touch locked. Press Power to turn the screen off and stop TouchLock if you need another way out.")
         content.addView(instructions)
-        content.addView(text("Blocks touches inside the app. System navigation, notifications, and hardware buttons remain available. Stop TouchLock from its notification if needed. Turning the screen off stops TouchLock.", 14f, muted).apply { setPadding(0, dp(20), 0, dp(16)) })
-        content.addView(text("Offline · No account · No accessibility access", 13f, teal, true))
+        content.addView(text("Gesture protection blocks notification pull-down and touch navigation while locked. It needs Accessibility on Android 13+. Android 13 temporarily uses touch exploration while locked; normal touch returns when you unlock. Without it, only app-area touches are blocked. Power and volume buttons remain available. Turning the screen off stops TouchLock.", 14f, muted).apply { setPadding(0, dp(20), 0, dp(16)) })
+        content.addView(text("Add the TouchLock widget from your home screen's Widgets menu to show the floating lock quickly.", 14f, muted).apply { setPadding(0, 0, 0, dp(16)) })
+        content.addView(button("Add home-screen widget", Color.rgb(225, 244, 245), teal) {
+            val widgets = getSystemService(AppWidgetManager::class.java)
+            if (widgets.isRequestPinAppWidgetSupported) {
+                widgets.requestPinAppWidget(ComponentName(this, TouchLockWidget::class.java), null, null)
+            } else Toast.makeText(this, "Long-press your home screen, choose Widgets, then TouchLock.", Toast.LENGTH_LONG).show()
+        })
+        content.addView(text("Offline · No account · Does not read screen content", 13f, teal, true))
         refresh()
+        handleWidgetIntent(intent)
     }
 
     private fun step(parent: LinearLayout, number: String, title: String, detail: String) {
@@ -120,16 +153,46 @@ class MainActivity : Activity() {
 
     private fun enable() {
         if (!Settings.canDrawOverlays(this)) { openOverlaySettings(); return }
+        if (TouchGuardService.requested(this) && !TouchGuardService.ready()) {
+            openGestureSettings()
+            return
+        }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
             !getPreferences(MODE_PRIVATE).getBoolean("notificationAsked", false)) {
             getPreferences(MODE_PRIVATE).edit().putBoolean("notificationAsked", true).apply()
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
         }
         try {
-            startForegroundService(Intent(this, TouchLockService::class.java).setAction(TouchLockService.ACTION_ENABLE))
+            val action = if (TouchLockService.running) TouchLockService.ACTION_SHOW else TouchLockService.ACTION_ENABLE
+            startForegroundService(Intent(this, TouchLockService::class.java).setAction(action))
         } catch (e: RuntimeException) {
             Toast.makeText(this, "TouchLock could not start. Check its permissions and try again.", Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun openGestureSettings() {
+        Toast.makeText(this, "Enable TouchLock gesture protection. If Android restricts it, allow restricted settings in TouchLock's app info first.", Toast.LENGTH_LONG).show()
+        try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        catch (e: android.content.ActivityNotFoundException) {
+            Toast.makeText(this, "Open Settings, Accessibility, TouchLock gesture protection.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun handleWidgetIntent(intent: Intent) {
+        if (intent.action == ACTION_WIDGET_ENABLE) {
+            intent.action = null
+            val ready = Settings.canDrawOverlays(this) &&
+                (!TouchGuardService.requested(this) || TouchGuardService.ready()) &&
+                (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+            enable()
+            if (ready) finish()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWidgetIntent(intent)
     }
 
     private fun openOverlaySettings() {
@@ -158,6 +221,17 @@ class MainActivity : Activity() {
         val notifications = getSystemService(NotificationManager::class.java).areNotificationsEnabled()
         notificationState.text = if (notifications) "Allowed. Lock, show button, and stop controls are available." else "Allow to lock from the panel and restore a hidden button."
         notificationButton.text = if (notifications) "Manage notifications" else "Allow notifications"
+        val strong = TouchGuardService.requested(this)
+        gestureState.text = when {
+            Build.VERSION.SDK_INT < 33 -> "Requires Android 13 or newer. App-area touch blocking is available."
+            !strong -> "Off. Notification pull-down and navigation remain available."
+            TouchGuardService.ready() && Build.VERSION.SDK_INT == 33 -> "Ready. Controls touchscreen input only while locked; normal touch returns when unlocked."
+            TouchGuardService.ready() -> "Ready. Captures touch gestures while locked; does not read screen content."
+            TouchGuardService.instance != null -> "Turn off other touch exploration services to use gesture protection."
+            else -> "Enable TouchLock gesture protection in Accessibility to block notification and navigation gestures."
+        }
+        gestureButton.visibility = if (strong) View.VISIBLE else View.GONE
+        gestureButton.text = if (TouchGuardService.ready()) "Manage gesture protection" else "Enable gesture protection"
         stateTitle.text = when { TouchLockService.locked -> "Screen touch locked"; TouchLockService.running -> "Ready when you are"; else -> "TouchLock is off" }
         stateDetail.text = when { TouchLockService.locked -> "Hold the floating lock for 3 seconds to unlock."; TouchLockService.running -> "Open your video, then tap the floating lock."; else -> "Enable the floating button, then open your video." }
         enableButton.text = if (!allowed) "Set up floating lock" else "Enable floating lock"
@@ -165,6 +239,7 @@ class MainActivity : Activity() {
         stopButton.visibility = if (TouchLockService.running) View.VISIBLE else View.GONE
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag") // The legacy overload is only used below API 33.
     override fun onStart() {
         super.onStart()
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, IntentFilter(TouchLockService.ACTION_STATE), RECEIVER_NOT_EXPORTED)

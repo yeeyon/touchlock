@@ -44,6 +44,8 @@ class TouchLockService : Service() {
     private lateinit var wm: WindowManager
     private var bubble: FloatingLockView? = null
     private var blocker: FrameLayout? = null
+    private var blockerManager: WindowManager? = null
+    private var captureGuard: TouchGuardService? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private val prefs by lazy { getSharedPreferences("position", MODE_PRIVATE) }
     private var rightSide = true
@@ -184,7 +186,15 @@ class TouchLockService : Service() {
 
     private fun lock() {
         if (locked) return
-        val root = object : FrameLayout(this) {
+        val strong = TouchGuardService.requested(this)
+        if (strong && !TouchGuardService.ready()) {
+            Toast.makeText(this, "Enable TouchLock gesture protection in Accessibility. Turn off other touch exploration services to use gesture protection.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val guard = if (strong) TouchGuardService.instance else null
+        val windowContext: Context = guard ?: this
+        val manager = windowContext.getSystemService(WindowManager::class.java)
+        val root = object : FrameLayout(windowContext) {
             override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
                 super.onSizeChanged(w, h, oldw, oldh)
                 post { positionUnlock(this) }
@@ -196,7 +206,7 @@ class TouchLockService : Service() {
             setOnTouchListener { _, _ -> true }
             keepScreenOn = true
         }
-        val unlock = LockControlView(this, { unlockSafely() }, { dx, dy ->
+        val unlock = LockControlView(windowContext, { unlockSafely() }, { dx, dy ->
             val child = root.getChildAt(0)
             val layout = child.layoutParams as FrameLayout.LayoutParams
             layout.leftMargin = (layout.leftMargin + dx).roundToInt().coerceIn(0, (root.width - layout.width).coerceAtLeast(0))
@@ -213,9 +223,19 @@ class TouchLockService : Service() {
         root.setOnApplyWindowInsetsListener { _, insets -> positionUnlock(root); insets }
         val params = overlayParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
         params.title = "TouchLock touch blocker"
+        if (guard != null) {
+            params.type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            if (Build.VERSION.SDK_INT >= 30) {
+                params.setFitInsetsTypes(0)
+                params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        }
         // Never FLAG_NOT_TOUCHABLE: this window deliberately consumes app-area touches.
-        wm.addView(root, params)
+        manager.addView(root, params)
         blocker = root
+        blockerManager = manager
+        captureGuard = guard
+        guard?.capture(root)
         locked = true
         removeBubble()
         updateNotification()
@@ -277,8 +297,11 @@ class TouchLockService : Service() {
         bubble = null; bubbleParams = null
     }
     private fun removeBlocker() {
-        blocker?.let { if (it.isAttachedToWindow) wm.removeViewImmediate(it) }
+        captureGuard?.releaseCapture()
+        captureGuard = null
+        blocker?.let { if (it.isAttachedToWindow) blockerManager?.removeViewImmediate(it) }
         blocker = null
+        blockerManager = null
     }
 
     private fun notification(): Notification {
