@@ -1,10 +1,12 @@
 # Protecting a video call from accidental system gestures
 
-## Gesture protection in TouchLock 1.1.1
+## Gesture protection in TouchLock 1.1.2
 
 On Android 14+, **Block system gestures** uses the touchscreen-capture mechanism tested below. Enable **TouchLock gesture protection** in Accessibility, then enable the floating lock and open your call app. Capture begins only when you tap to lock and ends when you hold to unlock, stop the service, or turn the screen off. If accessibility disconnects or touch exploration becomes active while locked, TouchLock stops. The mode refuses to lock when protection is unavailable; it does not silently substitute app-area blocking.
 
 Android 13 uses a separate `TouchInteractionController` callback, available from API 33. While locked, TouchLock requests touch exploration and handles raw touch events itself without delegating them to the rest of the input pipeline. Unlocking and stopping clear this temporary request. The capability is declared in accessibility metadata, but exploration is not enabled merely by turning on the service. Other services requesting exploration conflict with protection and must be off. Android 12 and older retain app-area blocking only. Version 1.1.0 did not implement this path and disabled the Android 13 switch.
+
+Version 1.1.1 registered its controller before requesting exploration. Android 13 can discard that request while its input filter is absent, so normal input was blocked but the unlock control received no callbacks. Version 1.1.2 requests exploration first, waits for it to enable, and retries controller registration until motion-event delivery confirms success. Re-registering the same callback does not add duplicate listeners. Unlocking or stopping cancels queued retries. The regression test uses kernel touchscreen events on an Android 13 emulator; an injected `input swipe` bypasses the filter and cannot verify this bug.
 
 The home-screen widget shows the floating control and restores its position if it is already running. It opens setup when required permissions are missing. Use **Add home-screen widget** in the app or the launcher's Widgets menu. This does not pin the current app or lock the home screen.
 
@@ -107,6 +109,7 @@ A restricted mode should use an on-screen parent exit rather than a notification
 - [Accessibility motion-event interception](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService#onMotionEvent(android.view.MotionEvent))
 - [Selecting accessibility motion-event sources](https://developer.android.com/reference/android/accessibilityservice/AccessibilityServiceInfo#setMotionEventSources(int))
 - [Android 13 touch interaction controller](https://developer.android.com/reference/android/accessibilityservice/TouchInteractionController)
+- [Android 13 input-filter registration implementation](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-13.0.0_r1/services/accessibility/java/com/android/server/accessibility/AccessibilityManagerService.java)
 - [Honor support mentioning screen pinning](https://www.honor.com/ae-en/support/content/en-us00410040/)
 
 Reviewed October 3, 2026. These are platform capabilities and recommendations, not a claim that every call app has been tested.

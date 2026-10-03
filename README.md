@@ -4,7 +4,7 @@
 
 [Download the signed APK](https://github.com/yeeyon/touchlock/releases/latest) ? [Report a problem](https://github.com/yeeyon/touchlock/issues)
 
-A small native Android app that blocks accidental taps and swipes over videos in WhatsApp and other apps. Kotlin, Android 8.0+ (API 26), targeting Android 15. Version 1.1.1 supports gesture protection on Android 13+ using an optional accessibility service. No internet permission, accounts, analytics, screen recording, or reading other apps' content.
+A small native Android app that blocks accidental taps and swipes over videos in WhatsApp and other apps. Kotlin, Android 8.0+ (API 26), targeting Android 15. Version 1.1.2 supports gesture protection on Android 13+ using an optional accessibility service. No internet permission, accounts, analytics, screen recording, or reading other apps' content.
 
 ## Features
 
@@ -20,7 +20,7 @@ A small native Android app that blocks accidental taps and swipes over videos in
 
 ## Install and use
 
-Build and install version 1.1.1 using the commands below, or install the supplied signed `TouchLock-1.1.1.apk`. Version 1.1.0's system-gesture switch was disabled on Android 13, even with Accessibility enabled. The previously published 1.0.1 APK in [Releases](https://github.com/yeeyon/touchlock/releases/latest) only blocks app-area touches. Android may ask you to allow installation from the app opening the APK.
+Build and install version 1.1.2 using the commands below, or install the supplied signed `TouchLock-1.1.2.apk`. This fixes the Android 13 unlock control in 1.1.1: its listener could register before Android installed the input filter, leaving the control without touch events. Version 1.1.0's system-gesture switch was disabled on Android 13, even with Accessibility enabled. The previously published 1.0.1 APK in [Releases](https://github.com/yeeyon/touchlock/releases/latest) only blocks app-area touches. Android may ask you to allow installation from the app opening the APK.
 
 1. Open TouchLock and grant **Display over other apps**. Return to TouchLock.
 2. Allow notifications for the lock, show-button, and stop actions.
@@ -71,6 +71,8 @@ Run `./gradlew :app:assembleRelease :app:testReleaseUnitTest` (Windows: `.\gradl
 
 ### Device check
 
+The Android 13 unlock regression is exercised through kernel touchscreen events in a disposable Pixel 4 emulator, rather than `adb shell input`, which bypasses the accessibility filter. See [the emulator regression test](tests/device/android13_unlock.py) for its setup requirements. Hardware-path touch delivery and hold/unlock behavior have been checked; manufacturer-specific behavior and video calls still require physical-device testing.
+
 Version 1.1.0 was installed on an Honor LNA-NX1 running Android 16 (API 36). Its accessibility service connected, the full-screen accessibility blocker attached, and the home-screen widget showed the floating control. A two-second hold stayed locked; a full hold restored the button and reset the capture source mask to zero. Screen-off and accessibility disconnection removed the blocker and floating button; reconnecting let the widget start again. The earlier physical-touch prototype test intercepted top, bottom, and side gestures on this phone. Final release testing of sustained Recents gestures and an actual video call still requires physical input; ADB-injected swipes bypass the accessibility input filter.
 
 The signed release was installed on an Honor BKQ_N49 running Android 17 (API 37). App-area taps and swipes were blocked, a two-second hold stayed locked, and a full three-second hold restored the ready button. This is a device smoke check, not certification across all video-call apps or Android devices.
@@ -81,6 +83,6 @@ The signed release was installed on an Honor BKQ_N49 running Android 17 (API 37)
 
 `LockControlView` cancels queued animation callbacks when detached or cancelled. `HoldGesture` uses a monotonic clock and is unit-tested at the 2,999 ms / 3,000 ms boundary. Orientation changes reposition the control inside safe screen insets. Service shutdown removes both windows and the notification.
 
-`TouchGuardService` supplies the accessibility window context and requests `SOURCE_TOUCHSCREEN` only while locked on Android 14+. Android 13 instead uses `TouchInteractionController` with a temporary `FLAG_REQUEST_TOUCH_EXPLORATION_MODE`; its callback consumes input without requesting delegation, dragging, or exploration. Motion events are copied into the existing blocker and hold/drag control. Unlock, stop, screen-off, and accessibility disconnection release capture and clear the temporary exploration flag. It does not request window-content retrieval. The widget starts the floating control and routes to setup when permissions are missing.
+`TouchGuardService` supplies the accessibility window context and requests `SOURCE_TOUCHSCREEN` only while locked on Android 14+. Android 13 instead uses `TouchInteractionController` with a temporary `FLAG_REQUEST_TOUCH_EXPLORATION_MODE`; its callback consumes input without requesting delegation, dragging, or exploration. Controller registration waits for exploration to enable and retries until the first received motion event confirms the input filter accepted it. Unlock and stop cancel pending registration retries. Motion events are copied into the existing blocker and hold/drag control. Unlock, stop, screen-off, and accessibility disconnection release capture and clear the temporary exploration flag. It does not request window-content retrieval. The widget starts the floating control and routes to setup when permissions are missing.
 
 Android references: [overlay windows](https://developer.android.com/reference/android/view/WindowManager.LayoutParams#TYPE_APPLICATION_OVERLAY), [foreground-service types](https://developer.android.com/develop/background-work/services/fgs/service-types#special-use), [foreground-service launch rules](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start).
