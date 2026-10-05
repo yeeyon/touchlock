@@ -51,6 +51,10 @@ class TouchLockService : Service() {
     private var rightSide = true
     private var yFraction = 0.6f
     private var receiverRegistered = false
+    /** Step-unlock route for the current lock, or null for the single hold button. */
+    private var steps: UnlockSteps? = null
+    private var stepIndex = 0
+    private val random = java.util.Random()
     private val screenOff = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) { stopSelf() }
     }
@@ -206,7 +210,9 @@ class TouchLockService : Service() {
             setOnTouchListener { _, _ -> true }
             keepScreenOn = true
         }
-        val unlock = LockControlView(windowContext, { unlockSafely() }, { dx, dy ->
+        steps = if (stepUnlockEnabled(this)) UnlockSteps.plan(random) else null
+        stepIndex = 0
+        val unlock = steps?.let { stepControl(windowContext, root, it) } ?: LockControlView(windowContext, { unlockSafely() }, { dx, dy ->
             val child = root.getChildAt(0)
             val layout = child.layoutParams as FrameLayout.LayoutParams
             layout.leftMargin = (layout.leftMargin + dx).roundToInt().coerceIn(0, (root.width - layout.width).coerceAtLeast(0))
@@ -242,6 +248,24 @@ class TouchLockService : Service() {
         publishState()
     }
 
+    /** The control for the current step. Finishing it shows the next one, or unlocks after the last. */
+    private fun stepControl(context: Context, root: FrameLayout, plan: UnlockSteps): LockControlView {
+        val index = stepIndex
+        return LockControlView(context, {
+            // Swap after this touch dispatch finishes, never while it is in progress.
+            root.post {
+                if (blocker !== root || stepIndex != index) return@post
+                if (index + 1 >= plan.count) { unlockSafely(); return@post }
+                stepIndex = index + 1
+                root.removeAllViews()
+                root.addView(stepControl(context, root, plan), FrameLayout.LayoutParams(dp(92), dp(112)))
+                positionUnlock(root)
+            }
+        }, { _, _ -> }, {}, movable = false,
+            holdMs = if (plan.needsHold(index)) 3_000L else 0L,
+            step = "${index + 1}/${plan.count}")
+    }
+
     private fun positionUnlock(root: FrameLayout) {
         if (root.childCount == 0 || root.width == 0) return
         val child = root.getChildAt(0)
@@ -259,9 +283,17 @@ class TouchLockService : Service() {
             }
         }
         val params = child.layoutParams as FrameLayout.LayoutParams
-        params.leftMargin = if (rightSide) (root.width - params.width - right).coerceAtLeast(left) else left
+        val maxX = (root.width - params.width - right).coerceAtLeast(left)
         val maxY = (root.height - params.height - bottom).coerceAtLeast(top)
-        params.topMargin = ((root.height - params.height) * yFraction).roundToInt().coerceIn(top, maxY)
+        val spot = steps?.spots?.getOrNull(stepIndex)
+        if (spot != null) {
+            // Fixed fractions of the safe area: the step stays put through rotation and insets.
+            params.leftMargin = (left + (maxX - left) * spot.first).roundToInt()
+            params.topMargin = (top + (maxY - top) * spot.second).roundToInt()
+        } else {
+            params.leftMargin = if (rightSide) maxX else left
+            params.topMargin = ((root.height - params.height) * yFraction).roundToInt().coerceIn(top, maxY)
+        }
         child.layoutParams = params
     }
 
@@ -310,7 +342,8 @@ class TouchLockService : Service() {
         val builder = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_lock)
             .setContentTitle(if (locked) "Screen touch locked" else "TouchLock ready")
-            .setContentText(if (locked) "Hold the floating lock for 3 seconds to unlock." else "Tap the floating lock when your video is playing.")
+            .setContentText(if (locked && steps != null) "Complete 3 unlock buttons. One needs a 3-second hold."
+                else if (locked) "Hold the floating lock for 3 seconds to unlock." else "Tap the floating lock when your video is playing.")
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_SERVICE)
         if (!locked) {

@@ -13,16 +13,25 @@ import android.view.ViewConfiguration
 import kotlin.math.abs
 import kotlin.math.ceil
 
-/** A single-finger hold. Moving outside, an extra finger, or cancellation resets it. */
+/**
+ * A single-finger hold, or a tap when [holdMs] is 0. Moving outside, an extra finger, or
+ * cancellation resets it. [step] labels the control as part of a multi-step unlock.
+ */
 internal class LockControlView(
     context: Context,
     private val onUnlock: () -> Unit,
     private val onDrag: (Float, Float) -> Unit,
-    private val onDragEnd: () -> Unit
+    private val onDragEnd: () -> Unit,
+    private val movable: Boolean = true,
+    private val holdMs: Long = 3_000L,
+    private val step: String? = null
 ) : View(context) {
     private val density = resources.displayMetrics.density
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val hold = HoldGesture()
+    private val tapOnly = holdMs <= 0L
+    private val hold = HoldGesture(holdMs.coerceAtLeast(1L))
+    /** Set once this control has unlocked; later events are ignored. */
+    private var fired = false
     private var holding = false
     private var rejected = false
     private var activePointer = -1
@@ -42,8 +51,7 @@ internal class LockControlView(
             if (hold.isComplete(SystemClock.uptimeMillis())) {
                 holding = false
                 hold.cancel()
-                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                onUnlock()
+                complete()
             } else {
                 invalidate()
                 postOnAnimation(this)
@@ -52,12 +60,25 @@ internal class LockControlView(
     }
 
     init {
-        contentDescription = "Touch locked. Hold still for three seconds to unlock, or drag to reposition."
+        val action = if (tapOnly) "Tap it" else "Hold still for three seconds"
+        contentDescription = when {
+            step != null -> "Touch locked. Unlock step $step. $action."
+            movable -> "Touch locked. Hold still for three seconds to unlock, or drag to reposition."
+            else -> "Touch locked. $action to unlock."
+        }
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         isClickable = true
     }
 
+    private fun complete() {
+        if (fired) return
+        fired = true
+        performHapticFeedback(if (tapOnly) HapticFeedbackConstants.VIRTUAL_KEY else HapticFeedbackConstants.LONG_PRESS)
+        onUnlock()
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (fired) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 rejected = false
@@ -69,14 +90,17 @@ internal class LockControlView(
                 holding = true
                 removeCallbacks(resetHint)
                 hintUntil = 0L
-                postOnAnimation(tick)
+                // A tap completes on release, so it needs no progress frames.
+                if (!tapOnly) postOnAnimation(tick)
             }
             MotionEvent.ACTION_POINTER_DOWN -> { multiplePointers = true; cancelHold() }
             MotionEvent.ACTION_MOVE -> {
                 val index = event.findPointerIndex(activePointer)
                 if (index < 0 || event.pointerCount != 1 || multiplePointers) {
                     cancelHold()
-                } else if (dragging || abs(event.rawX - downRawX) > touchSlop || abs(event.rawY - downRawY) > touchSlop) {
+                } else if (!movable && (abs(event.rawX - downRawX) > touchSlop || abs(event.rawY - downRawY) > touchSlop)) {
+                    cancelHold()
+                } else if (movable && (dragging || abs(event.rawX - downRawX) > touchSlop || abs(event.rawY - downRawY) > touchSlop)) {
                     dragging = true
                     cancelHold(false)
                     onDrag(event.rawX - lastRawX, event.rawY - lastRawY)
@@ -88,13 +112,10 @@ internal class LockControlView(
             }
             MotionEvent.ACTION_UP -> {
                 // A frame may not have run at the threshold; use the actual release time too.
-                val completed = holding && !rejected && hold.isComplete(SystemClock.uptimeMillis())
+                val completed = holding && !rejected && (tapOnly || hold.isComplete(SystemClock.uptimeMillis()))
                 cancelHold(showHint = !completed)
                 if (dragging) onDragEnd()
-                if (completed) {
-                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                    onUnlock()
-                }
+                if (completed) complete()
                 activePointer = -1
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -150,8 +171,15 @@ internal class LockControlView(
         paint.textAlign = Paint.Align.CENTER
         paint.textSize = 12 * density
         paint.isFakeBoldText = true
-        val label = if (holding) "${ceil(3 * (1 - hold.progress(SystemClock.uptimeMillis()))).toInt()}s"
-            else "HOLD 3s"
+        val seconds = (holdMs / 1000).coerceAtLeast(1)
+        val action = when {
+            tapOnly -> "TAP"
+            holding -> "${ceil(seconds * (1 - hold.progress(SystemClock.uptimeMillis()))).toInt()}s"
+            else -> "HOLD ${seconds}s"
+        }
+        val label = if (step != null) "$step $action" else action
+        // Shrink long step labels to fit the pill.
+        while (paint.measureText(label) > 72 * density && paint.textSize > 8 * density) paint.textSize -= 0.5f * density
         val bounds = RectF(cx - 40 * density, 79 * density, cx + 40 * density, 104 * density)
         paint.color = Color.rgb(16, 38, 60)
         canvas.drawRoundRect(bounds, 12 * density, 12 * density, paint)

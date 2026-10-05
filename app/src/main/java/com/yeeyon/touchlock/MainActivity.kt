@@ -120,6 +120,17 @@ class MainActivity : Activity() {
         permissions.addView(gestureState.apply { setPadding(0, dp(6), 0, dp(8)) })
         gestureButton = button("Enable gesture protection", Color.rgb(225, 244, 245), teal) { openGestureSettings() }
         permissions.addView(gestureButton)
+        permissions.addView(View(this).apply { setBackgroundColor(Color.rgb(229, 236, 243)) }, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(20); bottomMargin = dp(20) })
+        permissions.addView(Switch(this).apply {
+            text = "3-step unlock"
+            textSize = 18f
+            setTextColor(navy)
+            isChecked = stepUnlockEnabled(this@MainActivity)
+            setOnCheckedChangeListener { _, checked ->
+                getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("stepUnlock", checked).apply()
+            }
+        })
+        permissions.addView(text("Unlock with three buttons, one at a time, each at a random spot that changes every lock. Tap two of them; one, chosen at random, needs a 3-second hold. Applies the next time you lock.", 15f, muted).apply { setPadding(0, dp(6), 0, dp(8)) })
         content.addView(permissions)
 
         content.addView(text("HOW TO USE", 13f, teal, true).apply { setPadding(0, dp(26), 0, dp(12)); letterSpacing = 0.12f })
